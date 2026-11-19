@@ -130,19 +130,3 @@ function detectGridAt(src: Raster): Grid | null {
   const allRows = merged.filter((y) => longestRun((x) => dark[y * w + left + x], right - left, bridge * 2) >= (right - left) * 0.5);
   return { rows, cols, allRows };
 }
-
-/**
- * x of long vertical rules anywhere on the page (columns of tables whose rows aren't ruled,
- * like the printed Statement of Marks). Narrow double lines (decorative borders) are merged.
- */
-export function detectVerticalLines(full: Raster): number[] {
-  const f = full.width > 1300 ? full.width / 1100 : 1;
-  const src = f > 1 ? resize(full, Math.round(full.width / f), Math.round(full.height / f)) : full;
-  const { width: w, height: h } = src;
-  const dark = darkMask(src);
-  const bridge = Math.max(2, Math.round(h / 300));
-  const xs: number[] = [];
-  for (let x = 0; x < w; x++) if (longestRun((y) => dark[y * w + x], h, bridge) >= h * 0.18) xs.push(x);
-  const merged = merge(xs, Math.max(3, Math.round(w / 150)));
-  return merged.map((x) => Math.round(x * f));
-}

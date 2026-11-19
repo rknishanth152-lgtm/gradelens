@@ -17,9 +17,7 @@ export function codeCategory(code: string): string | null {
   return m ? m[1] : null;
 }
 
-// Counted categories for this programme. Everything else (AEC languages, VAC, ANC non-credit,
-// and 'additional credit' courses such as HMU) is left out of SGPA/CGPA, as on the official sheets.
-const COUNTED = new Set(['CSS', 'MCU', 'CTU', 'MDC']);
+const EXCLUDED = new Set(['AEC', 'VAC', 'ANC']);
 
 /**
  * Whether a subject counts towards SGPA/CGPA.
@@ -30,7 +28,7 @@ export function isCounted(code: string): boolean {
   if (/^NPTEL/i.test(code.trim())) return true;
   const cat = codeCategory(code);
   if (!cat) return true;
-  return COUNTED.has(cat);
+  return !EXCLUDED.has(cat);
 }
 
 export interface GradedSubject {

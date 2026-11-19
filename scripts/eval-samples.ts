@@ -14,9 +14,8 @@ import { extractPdfItems, parseItems, sheetTotals, verifySheet, type PositionedT
 import { importSem3, prevTargets, KNOWN_PREV_CODES } from '../src/lib/sem3Import';
 import { prepareForOcr, ocrWordsToItems, OCR_PARAMS, enhanceCell, cropRaster, tightRect, type OcrWord, type Raster } from '../src/lib/imagePrep';
 import { readSem3FromImage, type OcrEngine } from '../src/lib/ocrTable';
-import { detectGrid, detectVerticalLines } from '../src/lib/grid';
+import { detectGrid } from '../src/lib/grid';
 import { readStatementFromImage } from '../src/lib/statementOcr';
-import { verifyPartIII } from '../src/lib/readMarks';
 import { roundHalfUp } from '../src/lib/grading';
 import { PaddleRecognizer } from '../src/lib/paddleRec';
 
@@ -31,26 +30,8 @@ const DIR = resolve(__dirname, '../test-fixtures/private');
 const expected = JSON.parse(readFileSync(join(DIR, 'expected.json'), 'utf8'));
 const filter = process.argv[2];
 
-/** Largest embedded JPEG of a picture-only PDF (what the browser would render). */
-function pdfImage(buf: Buffer): Buffer {
-  const s = buf.toString('latin1');
-  let best: Buffer | null = null;
-  const re = /<<([^]*?)>>\s*stream\r?\n/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) {
-    if (!/DCTDecode/.test(m[1])) continue;
-    const len = /\/Length\s+(\d+)/.exec(m[1]);
-    const start = m.index + m[0].length;
-    const data = buf.subarray(start, len ? start + Number(len[1]) : s.indexOf('endstream', start));
-    if (!best || data.length > best.length) best = data;
-  }
-  if (!best) throw new Error('no image in pdf');
-  return best;
-}
-
 function decode(file: string) {
-  let buf = readFileSync(file);
-  if (/\.pdf$/i.test(file)) buf = pdfImage(buf);
+  const buf = readFileSync(file);
   if (/\.png$/i.test(file)) {
     const p = PNG.sync.read(buf);
     return { data: new Uint8ClampedArray(p.data.buffer, p.data.byteOffset, p.data.length), width: p.width, height: p.height };
@@ -69,7 +50,7 @@ function toPng(r: Raster) {
   return PNG.sync.write(png);
 }
 
-async function engineFor(file: string): Promise<{ engine: OcrEngine; done: () => Promise<void>; grid: ReturnType<typeof detectGrid>; vlines: number[] }> {
+async function engineFor(file: string): Promise<{ engine: OcrEngine; done: () => Promise<void>; grid: ReturnType<typeof detectGrid> }> {
   const img = prepareForOcr(decode(file));
   const png = new PNG({ width: img.width, height: img.height });
   png.data = Buffer.from(img.data.buffer);
@@ -99,7 +80,7 @@ async function engineFor(file: string): Promise<{ engine: OcrEngine; done: () =>
     const p = paddle;
     engine.lineAlt = async (rect, whitelist) => (rect.width < 6 || rect.height < 6 ? '' : (await p.recognize(process.env.PADDLE_PREP === 'enhance' ? enhanceCell(img, rect) : cropRaster(img, tightRect(img, rect)), whitelist || undefined)).text);
   }
-  return { engine, done: () => worker.terminate(), grid: detectGrid(img), vlines: detectVerticalLines(img) };
+  return { engine, done: () => worker.terminate(), grid: detectGrid(img) };
 }
 
 async function itemsFor(file: string): Promise<PositionedText[]> {
@@ -126,16 +107,15 @@ let total = 0;
 for (const f of readdirSync(DIR).filter((f) => expected[f] && (!filter || f.includes(filter)))) {
   const exp = expected[f];
   const t0 = Date.now();
-  const items = !/\.pdf$/i.test(f) || /harini/.test(f) ? [] : await itemsFor(join(DIR, f));
+  const items = !/\.pdf$/i.test(f) ? [] : await itemsFor(join(DIR, f));
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   if (exp.kind === 'sem3' || exp.kind === 'prevResult') {
     const targets = exp.kind === 'prevResult' ? prevTargets(exp.sem) : undefined;
     const known = exp.kind === 'prevResult' ? KNOWN_PREV_CODES[exp.sem as 1 | 2] : undefined;
     let r = importSem3(items, targets);
-    if (!/\.pdf$/i.test(f) || items.length < 5) {
-      const { engine, done, grid, vlines } = await engineFor(join(DIR, f));
-      r = await readSem3FromImage(engine, grid, targets, known, vlines);
-      if (exp.kind === 'prevResult') { const v = verifyPartIII(r, targets!); if (v.verified) r = v.result; console.log(`   part III printed ${v.printed} verified ${v.verified}`); }
+    if (!/\.pdf$/i.test(f)) {
+      const { engine, done, grid } = await engineFor(join(DIR, f));
+      r = await readSem3FromImage(engine, grid, targets, known);
       await done();
     }
     const rows = Object.entries(exp.marks as Record<string, number>).map(([id, want]) => {

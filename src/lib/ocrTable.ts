@@ -93,9 +93,9 @@ const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 export async function readSem3FromGrid(engine: OcrEngine, cols: MarkColumns, grid: Grid, targets: Target[] = TARGETS, known: string[] = KNOWN_SEM3_CODES): Promise<Sem3ImportResult | null> {
   const colOf = (x: number) => grid.cols.findIndex((c, i) => i < grid.cols.length - 1 && x > c && x < grid.cols[i + 1]);
   const idx = cols.centres.map(colOf);
-  if (idx.some((i) => i < 0) || new Set(idx).size !== 3 || !(idx[2] > idx[0] && idx[2] > idx[1])) return null;
+  if (idx.some((i) => i < 0) || new Set(idx).size !== 3 || !(idx[0] < idx[1] && idx[1] < idx[2])) return null;
   // Name column = widest column left of CIA; code column = the one just left of it.
-  const leftCols = Array.from({ length: Math.min(idx[0], idx[1]) }, (_, i) => i);
+  const leftCols = Array.from({ length: idx[0] }, (_, i) => i);
   if (!leftCols.length) return null;
   const nameCol = leftCols.reduce((a, b) => (grid.cols[b + 1] - grid.cols[b] > grid.cols[a + 1] - grid.cols[a] ? b : a));
   const codeCol = nameCol > 0 ? nameCol - 1 : -1;
@@ -151,32 +151,22 @@ export function mergeResults(a: Sem3ImportResult, b: Sem3ImportResult | null, ta
   };
 }
 
-export function findMarkColumns(words: OcrWord[], order: 'cia-first' | 'ese-first' = 'cia-first'): MarkColumns | null {
+export function findMarkColumns(words: OcrWord[]): MarkColumns | null {
   const is = (w: OcrWord, re: RegExp) => re.test(letters(w.text));
   const CIA = /^(CIA|C1A|CLA|GIA|CA|CIAS)$/;
   const ESE = /^(ESE|E5E|F5E|FSE|ESF|EBE|ESES)$/;
   const TOT = /^(TOTAL|T0TAL|TOTA|TOTAI|IOTAL|TOTL|OTAL)$/;
   const RES = /^(RESULT|RESUIT|RESULF|RESLT|ESULT)$/;
   const sameLine = (a: OcrWord, b: OcrWord) => Math.abs(a.bbox.y0 - b.bbox.y0) < Math.max(a.bbox.y1 - a.bbox.y0, 12) * 1.2;
-  // Find the header line with ESE / CIA / TOTAL in either order (result pages put CIA first,
-  // printed Statements of Marks put ESE first). When a "maximum" and a "secured" group both appear,
-  // take the rightmost (secured) one: TOTAL is always the right-most of its group.
+  // Pick the header line where the columns appear left to right: CIA < ESE < TOTAL (< RESULT).
   let best: { cia?: OcrWord; ese?: OcrWord; tot?: OcrWord; res?: OcrWord; n: number } = { n: 0 };
   const seeds = words.filter((w) => is(w, CIA) || is(w, ESE) || is(w, TOT));
-  const rightmost = (ws: OcrWord[]) => ws.sort((a, b) => b.bbox.x0 - a.bbox.x0)[0];
   for (const s of seeds) {
     const row = words.filter((w) => sameLine(w, s));
-    const tot = rightmost(row.filter((w) => is(w, TOT)));
-    const before = (w: OcrWord) => !tot || w.bbox.x1 <= tot.bbox.x0 + 2;
-    // Result pages: CIA | ESE | TOTAL. Printed Statements of Marks: ESE | CIA | TOTAL.
-    let cia: OcrWord | undefined = rightmost(row.filter((w) => is(w, CIA) && before(w)));
-    let ese: OcrWord | undefined = rightmost(row.filter((w) => is(w, ESE) && before(w)));
-    if (cia && ese && (order === 'cia-first' ? ese.bbox.x0 < cia.bbox.x0 : cia.bbox.x0 < ese.bbox.x0)) {
-      // Wrong order: the one on the wrong side is a stray word.
-      if (order === 'cia-first') ese = undefined;
-      else cia = undefined;
-    }
-    const res = row.filter((w) => is(w, RES) && (!tot || w.bbox.x0 > tot.bbox.x1)).sort((a, b) => a.bbox.x0 - b.bbox.x0)[0];
+    const cia = row.find((w) => is(w, CIA));
+    const ese = row.find((w) => is(w, ESE) && (!cia || w.bbox.x0 > cia.bbox.x1));
+    const tot = row.find((w) => is(w, TOT) && (!ese || w.bbox.x0 > ese.bbox.x1) && (!cia || w.bbox.x0 > cia.bbox.x1));
+    const res = row.find((w) => is(w, RES) && (!tot || w.bbox.x0 > tot.bbox.x1));
     const n = [cia, ese, tot].filter(Boolean).length;
     if (n > best.n) best = { cia, ese, tot, res, n };
   }
@@ -184,56 +174,43 @@ export function findMarkColumns(words: OcrWord[], order: 'cia-first' | 'ese-firs
   const { cia, ese, tot, res } = best;
   const anchors = [cia, ese, tot].filter(Boolean) as OcrWord[];
   const h = Math.max(...anchors.map((w) => w.bbox.y1 - w.bbox.y0));
+  const left = (cia ?? ese ?? tot)!.bbox.x0 - h * 1.2;
+  const rightEdge = tot ? tot.bbox.x1 + h * 0.9 : ese!.bbox.x1 + h * 4;
+  const right = res ? Math.min(rightEdge, res.bbox.x0 - h * 0.2) : rightEdge;
+  if (right - left < h * 3) return null;
 
-  // Column centres by key (fill one missing header from the spacing of the others).
+  // One cell per column, centred under its header (fill in a missing header by spacing).
   const cxOf = (w?: OcrWord) => (w ? (w.bbox.x0 + w.bbox.x1) / 2 : null);
-  const centre: Record<'cia' | 'ese' | 'tot', number | null> = { cia: cxOf(cia), ese: cxOf(ese), tot: cxOf(tot) };
-  // Column slots in reading order, so a missing header can be placed from the spacing of the others.
-  const slot = order === 'cia-first' ? { cia: 0, ese: 1, tot: 2 } : { ese: 0, cia: 1, tot: 2 };
-  const have = (['cia', 'ese', 'tot'] as const).filter((k) => centre[k] != null);
-  const [k1, k2] = have;
-  const step = have.length >= 2 ? (centre[k2]! - centre[k1]!) / (slot[k2] - slot[k1]) : h * 4;
-  if (centre.tot == null) centre.tot = centre[k1]! + (2 - slot[k1]) * step;
-  if (order === 'cia-first') {
-    if (centre.ese == null) centre.ese = centre.tot - step;
-    if (centre.cia == null) centre.cia = centre.ese - step;
-  } else {
-    if (centre.cia == null) centre.cia = centre.tot - step;
-    if (centre.ese == null) centre.ese = centre.cia - step;
-  }
-  const centres = [centre.cia!, centre.ese!, centre.tot!];
-  const byX = (['cia', 'ese', 'tot'] as const).slice().sort((a, b) => centre[a]! - centre[b]!);
-  const xs = byX.map((k) => centre[k]!);
-  const cells = byX.map((key, i) => {
-    const cx = xs[i];
-    const gapL = i > 0 ? cx - xs[i - 1] : xs[1] - xs[0];
-    const gapR = i < 2 ? xs[i + 1] - cx : xs[2] - xs[1];
+  let [c1, c2, c3] = [cxOf(cia), cxOf(ese), cxOf(tot)];
+  if (c2 == null && c1 != null && c3 != null) c2 = (c1 + c3) / 2;
+  if (c1 == null && c2 != null && c3 != null) c1 = c2 - (c3 - c2);
+  if (c3 == null && c1 != null && c2 != null) c3 = c2 + (c2 - c1);
+  const centres = [c1!, c2!, c3!];
+  const keys = ['cia', 'ese', 'tot'] as const;
+  const cells = centres.map((cx, i) => {
+    const gapL = i > 0 ? cx - centres[i - 1] : centres[1] - centres[0];
+    const gapR = i < 2 ? centres[i + 1] - cx : centres[2] - centres[1];
     // Numbers may be left-aligned (printouts) or centred (web page): lean the cell left.
     let l = cx - gapL * 0.56;
     let r = cx + gapR * 0.44;
     if (i === 2 && res) r = Math.min(r, res.bbox.x0 - 2);
     l = Math.max(0, l);
-    return { key, left: Math.round(l), width: Math.max(8, Math.round(r - l)) };
+    return { key: keys[i], left: Math.round(l), width: Math.max(8, Math.round(r - l)) };
   });
-  const left = cells[0].left;
-  const right = cells[2].left + cells[2].width;
-  if (right - left < h * 3) return null;
   return { left, right, headerBottom: Math.max(...anchors.map((w) => w.bbox.y1)), headerTop: Math.min(...anchors.map((w) => w.bbox.y0)), centres, cells };
 }
 
 /** Read Sem 3 marks from an image with two passes. */
-export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = null, targets: Target[] = TARGETS, known: string[] = KNOWN_SEM3_CODES, vlines: number[] = []): Promise<Sem3ImportResult> {
+export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = null, targets: Target[] = TARGETS, known: string[] = KNOWN_SEM3_CODES): Promise<Sem3ImportResult> {
   const words = await engine.page();
   const items = ocrWordsToItems(words);
   const base = importSem3(items, targets); // pass-1 result, used as a fallback and for reg no / name
   // Header not readable (e.g. "TOTALRESULT" glued)? On a ruled sheet the last four columns are
   // CIA | ESE | TOTAL | RESULT in this college's layout, so take them from the grid.
-  const pageText = words.map((w) => w.text).join(' ');
-  const isStatementOfMarks = /SECURED|STATEMENT\s+OF\s+MARKS|CHOICE\s+BASED/i.test(pageText);
-  const cols = (isStatementOfMarks ? columnsFromStatementOfMarks(words, vlines) : null) ?? findMarkColumns(words, isStatementOfMarks ? 'ese-first' : 'cia-first') ?? (grid ? columnsFromGrid(grid) : null);
+  const cols = findMarkColumns(words) ?? (grid ? columnsFromGrid(grid) : null);
   if (!cols) return base;
   // Ruled table: read cell by cell between the grid lines first.
-  const fromGrid = grid && !isStatementOfMarks ? await readSem3FromGrid(engine, cols, grid, targets, known) : null;
+  const fromGrid = grid ? await readSem3FromGrid(engine, cols, grid, targets, known) : null;
   if (fromGrid && Object.values(fromGrid.marks).filter((m) => m.confidence === 'high').length >= targets.length - 2) {
     return crossCheck({ ...mergeResults(fromGrid, base, targets), regNo: base.regNo, studentName: base.studentName }, base, targets);
   }
@@ -319,42 +296,7 @@ export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = n
     }
   }
   result.missing = targets.map((t) => t.id).filter((id) => !result.marks[id]);
-  const done = crossCheck(fromGrid ? { ...mergeResults(fromGrid, result, targets), regNo: base.regNo, studentName: base.studentName } : result, base, targets);
-  return { ...done, pageText: groupLines(items).map((l) => l.text).join('\n') };
-}
-
-/**
- * Printed "Statement of Marks": … | ESE CIA TOTAL (secured) | GRADE POINTS | GRADE | RESULT.
- * Anchor on the PASS/FAIL column (printed on every row) and step left through the vertical rules.
- */
-export function columnsFromStatementOfMarks(words: OcrWord[], vlines: number[]): MarkColumns | null {
-  const lines = [...vlines].sort((a, b) => a - b);
-  if (lines.length < 7) return null;
-  const pass = words.filter((w) => /^(PASS|PA55|PAS5|PA5S|FAIL|RA)$/i.test(letters(w.text)));
-  if (pass.length < 2) return null;
-  const xs = pass.map((w) => (w.bbox.x0 + w.bbox.x1) / 2).sort((a, b) => a - b);
-  const px = xs[Math.floor(xs.length / 2)];
-  const r = lines.findIndex((x, i) => i < lines.length - 1 && px > x && px < lines[i + 1]);
-  if (r < 5) return null;
-  const iv = (i: number) => ({ left: lines[i] + 4, width: lines[i + 1] - lines[i] - 8 });
-  const ese = iv(r - 5);
-  const cia = iv(r - 4);
-  const tot = iv(r - 3);
-  if ([ese, cia, tot].some((c) => c.width < 10)) return null;
-  const centres = [cia.left + cia.width / 2, ese.left + ese.width / 2, tot.left + tot.width / 2];
-  const top = Math.min(...pass.map((w) => w.bbox.y0)) - 200;
-  return {
-    left: ese.left,
-    right: tot.left + tot.width,
-    headerTop: top,
-    headerBottom: top,
-    centres,
-    cells: [
-      { key: 'ese', ...ese },
-      { key: 'cia', ...cia },
-      { key: 'tot', ...tot },
-    ],
-  };
+  return crossCheck(fromGrid ? { ...mergeResults(fromGrid, result, targets), regNo: base.regNo, studentName: base.studentName } : result, base, targets);
 }
 
 export function columnsFromGrid(grid: Grid): MarkColumns | null {

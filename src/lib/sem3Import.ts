@@ -27,8 +27,6 @@ export interface Sem3ImportResult {
   studentName: string | null;
   /** Subject ids we couldn't find. */
   missing: string[];
-  /** Whole-page OCR text (images only), e.g. for the printed SGPA summary. */
-  pageText?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,8 +100,7 @@ export function toNumber(tok: string): number | null {
 /** Pick CIA / ESE / total from a row of numbers. */
 export function pickMarks(nums: number[], def: Sem3Subject): ImportedMark | null {
   const { ciaMax, eseMax, totalMax } = def;
-  // The printed maximums (in either order) are never the student's marks.
-  const isMaxTriple = (a: number, b: number, c: number) => c === totalMax && ((a === ciaMax && b === eseMax) || (a === eseMax && b === ciaMax));
+  const isMaxTriple = (a: number, b: number, c: number) => a === ciaMax && b === eseMax && c === totalMax;
 
   if (eseMax > 0) {
     // Look for cia + ese = total (in either order); prefer the last match (secured comes after max).
