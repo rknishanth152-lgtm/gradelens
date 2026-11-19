@@ -9,7 +9,8 @@ import { FriendlyParseError, isPdfFile, loadPdfItems, type PositionedText } from
 import { cropRaster, enhanceCell, OCR_PARAMS, prepareForOcr, tightRect, type OcrWord, type Raster } from './imagePrep';
 import { PaddleRecognizer } from './paddleRec';
 import { readStatementFromImage } from './statementOcr';
-import { detectGrid } from './grid';
+import { gradePoint, roundHalfUp } from './grading';
+import { detectGrid, detectVerticalLines } from './grid';
 import { readSem3FromImage, type OcrEngine } from './ocrTable';
 import { importSem3, KNOWN_SEM3_CODES, TARGETS, type Sem3ImportResult, type Target } from './sem3Import';
 
@@ -105,6 +106,7 @@ export async function readMarksTable(
 
   const raster = prepareForOcr(source);
   const grid = detectGrid(raster);
+  const vlines = detectVerticalLines(raster);
   onProgress({ stage: 'loading-model', progress: 0.12 });
   const paddleLoading = loadPaddle();
   let phase: 'page' | 'cells' = 'page';
@@ -143,13 +145,23 @@ export async function readMarksTable(
     // DigiLocker Statement of Grade photo: many columns → cross-checked statement reader.
     if (opts.statement && grid && grid.cols.length - 1 >= 15) {
       const words = await engine.page();
-      const st = await readStatementFromImage(engine, grid, targets, known, words);
+      // Many-column grid = DigiLocker Statement of Grade, unless the page is clearly a printed
+      // "Statement of Marks" (that layout is read by the secured-columns reader instead).
+      const text = words.map((w) => w.text).join(' ');
+      const isDigiLocker = !/SECURED|STATEMENT\s+OF\s+MARKS|CHOICE\s+BASED/i.test(text);
+      const st = isDigiLocker ? await readStatementFromImage(engine, grid, targets, known, words) : null;
       if (st && Object.keys(st.result.marks).length) {
         onProgress({ stage: 'done', progress: 1 });
         return { kind: 'photo', result: st.result, printedSgpa: st.printedSgpa, verified: st.verified };
       }
     }
-    const result = await readSem3FromImage(engine, grid, targets, known);
+    let result = await readSem3FromImage(engine, grid, targets, known, vlines);
+    if (opts.statement) {
+      const v = verifyPartIII(result, targets);
+      if (v.verified) result = v.result;
+      onProgress({ stage: 'done', progress: 1 });
+      return { kind: 'photo', result, printedSgpa: v.printed, verified: v.verified };
+    }
     onProgress({ stage: 'done', progress: 1 });
     return { kind: 'photo', result };
   } finally {
@@ -205,4 +217,25 @@ function toCanvas(r: Raster): HTMLCanvasElement {
   c.height = r.height;
   c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(r.data), r.width, r.height), 0, 0);
   return c;
+}
+
+/**
+ * Printed "Statement of Marks" sheets list SGPA per Part at the bottom; Part III is exactly the counted
+ * SGPA ("III  15  7.1  7.2"). If the marks we read reproduce it, they're confirmed.
+ */
+export function verifyPartIII(result: Sem3ImportResult, targets: Target[]): { result: Sem3ImportResult; printed: number | null; verified: boolean } {
+  const credits = targets.reduce((a, t) => a + t.def.credits, 0);
+  let printed: number | null = null;
+  for (const line of (result.pageText ?? '').split('\n')) {
+    const m = /(?:^|\s)(?:III|Ill|lll|1II|II1|111|IIl)\s+(\d{1,2})\s+(\d{1,2})[.,](\d)\b/.exec(line);
+    if (m && Number(m[1]) === credits) {
+      printed = Number(m[2] + '.' + m[3]);
+      break;
+    }
+  }
+  if (printed == null || targets.some((t) => !result.marks[t.id])) return { result, printed, verified: false };
+  const sgpa = targets.reduce((a, t) => a + gradePoint(result.marks[t.id].total, t.def.totalMax) * t.def.credits, 0) / credits;
+  if (roundHalfUp(sgpa, 1) !== printed) return { result, printed, verified: false };
+  const marks = Object.fromEntries(Object.entries(result.marks).map(([k, m]) => [k, { ...m, confidence: 'high' as const }]));
+  return { result: { ...result, marks }, printed, verified: true };
 }

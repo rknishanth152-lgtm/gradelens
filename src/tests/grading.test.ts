@@ -49,6 +49,9 @@ describe('gradePoint', () => {
 });
 
 describe('isCounted', () => {
+  it('excludes additional-credit courses like HMU (not in Part III SGPA)', () => {
+    expect(isCounted('25HMU02A')).toBe(false);
+  });
   it('excludes AEC, VAC, ANC', () => {
     expect(isCounted('25AEC21')).toBe(false);
     expect(isCounted('25VAC03')).toBe(false);
