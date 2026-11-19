@@ -1,7 +1,7 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Camera, FileUp, ImageUp, RotateCcw } from 'lucide-react';
 import { useStore, type Sem3Source } from '../state/store';
-import { readMarksTable, type ReadProgress } from '../lib/readMarks';
+import { readMarksTable, warmUpReaders, type ReadProgress } from '../lib/readMarks';
 import { FriendlyParseError } from '../lib/pdfParser';
 import { emptyMark } from '../lib/sem3';
 import { SEM3_SUBJECTS } from '../data/subjects';
@@ -53,6 +53,8 @@ const STAGE_TEXT: Record<ReadProgress['stage'], string> = {
 
 export function ImportPane({ kind }: { kind: 'photo' | 'pdf' }) {
   const { update } = useStore();
+  // Start fetching the readers now; picking a screenshot takes a few seconds anyway.
+  useEffect(() => warmUpReaders(), []);
   const [progress, setProgress] = useState<ReadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nothing, setNothing] = useState(false);

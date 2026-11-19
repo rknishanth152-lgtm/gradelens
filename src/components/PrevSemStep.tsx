@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FileText, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useStore } from '../state/store';
 import { computePrev, parseSgpa, type PrevSemInput, type SemNo } from '../lib/prevSem';
 import { FriendlyParseError, isPassed, isPdfFile, parsePdfFile, type ParsedSheet, type ParsedSubject } from '../lib/pdfParser';
-import { isImageFile, readMarksTable, type ReadProgress } from '../lib/readMarks';
+import { isImageFile, readMarksTable, warmUpReaders, type ReadProgress } from '../lib/readMarks';
 import { KNOWN_PREV_CODES, prevTargets } from '../lib/sem3Import';
 import { fmt, gradePoint, isCounted, roundHalfUp } from '../lib/grading';
 import { PREV_SUBJECTS, DEFAULT_PREV_CREDITS } from '../data/subjects';
@@ -90,6 +90,8 @@ function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
   const [error, setError] = useState<string | null>(null);
   const [misplaced, setMisplaced] = useState<ParsedSheet | null>(null);
   const result = useMemo(() => computePrev(sem, input), [sem, input]);
+  // Start fetching the readers while the student finds their screenshot.
+  useEffect(() => warmUpReaders(), []);
   const other = state.prev[sem === 1 ? 2 : 1].sheet;
   const sheet = input.sheet;
 

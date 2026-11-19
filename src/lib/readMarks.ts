@@ -20,6 +20,33 @@ export interface ReadProgress {
   progress: number;
 }
 
+type TessWorker = Awaited<ReturnType<(typeof import('tesseract.js'))['createWorker']>>;
+let tessPromise: Promise<TessWorker> | null = null;
+let tessLog: ((m: { status: string; progress: number }) => void) | null = null;
+
+/** One shared tesseract worker for the whole visit (created once, reused by every upload). */
+function loadTesseract(): Promise<TessWorker> {
+  tessPromise ??= import('tesseract.js')
+    .then(({ createWorker }) => createWorker('eng', 1, { logger: (m: { status: string; progress: number }) => tessLog?.(m) }))
+    .catch((e) => {
+      tessPromise = null;
+      throw e;
+    });
+  return tessPromise;
+}
+
+/**
+ * Start downloading both readers in the background as soon as a student opens an upload option,
+ * so most of the one-time download is done before they've picked their screenshot.
+ * Skipped when the phone asks to save data.
+ */
+export function warmUpReaders(): void {
+  const conn = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+  if (conn?.saveData) return;
+  void loadPaddle();
+  void loadTesseract().catch(() => undefined);
+}
+
 let paddlePromise: Promise<PaddleRecognizer | null> | null = null;
 
 /** PaddleOCR recognizer (self-hosted model + ONNX Runtime WASM). Null if it can't load: tesseract alone still works. */
@@ -80,15 +107,13 @@ export async function readMarksTable(
   const grid = detectGrid(raster);
   onProgress({ stage: 'loading-model', progress: 0.12 });
   const paddleLoading = loadPaddle();
-  const { createWorker } = await import('tesseract.js');
   let phase: 'page' | 'cells' = 'page';
   let cellsRead = 0;
-  const worker = await createWorker('eng', 1, {
-    logger: (m: { status: string; progress: number }) => {
-      if (phase === 'page' && m.status === 'recognizing text') onProgress({ stage: 'reading', progress: 0.3 + m.progress * 0.3 });
-      else if (phase === 'page' && /loading|initializ/i.test(m.status)) onProgress({ stage: 'loading-model', progress: 0.12 + m.progress * 0.18 });
-    },
-  });
+  tessLog = (m) => {
+    if (phase === 'page' && m.status === 'recognizing text') onProgress({ stage: 'reading', progress: 0.3 + m.progress * 0.3 });
+    else if (phase === 'page' && /loading|initializ/i.test(m.status)) onProgress({ stage: 'loading-model', progress: 0.12 + m.progress * 0.18 });
+  };
+  const worker = await loadTesseract();
   const paddle = await paddleLoading;
   const pageCanvas = toCanvas(raster);
   const engine: OcrEngine = {
@@ -128,7 +153,8 @@ export async function readMarksTable(
     onProgress({ stage: 'done', progress: 1 });
     return { kind: 'photo', result };
   } finally {
-    await worker.terminate();
+    // Keep the reader alive: the next upload starts instantly.
+    tessLog = null;
   }
 }
 
