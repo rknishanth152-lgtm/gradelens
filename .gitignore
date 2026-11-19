@@ -2,4 +2,8 @@ node_modules
 dist
 *.local
 .vercel
-test-fixtures/*.pdf
+# Real marksheets: never commit
+test-fixtures/*
+!test-fixtures/README.md
+# OCR model downloaded by the accuracy script
+*.traineddata

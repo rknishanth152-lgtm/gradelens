@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { FileText, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useStore } from '../state/store';
 import { computePrev, parseSgpa, type PrevSemInput, type SemNo } from '../lib/prevSem';
-import { FriendlyParseError, isPassed, parsePdfFile, type ParsedSheet, type ParsedSubject } from '../lib/pdfParser';
+import { FriendlyParseError, isPassed, isPdfFile, parsePdfFile, type ParsedSheet, type ParsedSubject } from '../lib/pdfParser';
+import { isImageFile, readMarksTable, type ReadProgress } from '../lib/readMarks';
+import { KNOWN_PREV_CODES, prevTargets } from '../lib/sem3Import';
 import { fmt, gradePoint, isCounted, roundHalfUp } from '../lib/grading';
 import { PREV_SUBJECTS, DEFAULT_PREV_CREDITS } from '../data/subjects';
 import { parseMark } from '../lib/sem3';
@@ -84,6 +86,7 @@ function SheetPreview({ sheet, onChange }: { sheet: ParsedSheet; onChange: (s: P
 function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput; setInput: (p: Partial<PrevSemInput>) => void }) {
   const { state, update } = useStore();
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<ReadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [misplaced, setMisplaced] = useState<ParsedSheet | null>(null);
   const result = useMemo(() => computePrev(sem, input), [sem, input]);
@@ -95,16 +98,42 @@ function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
     setMisplaced(null);
     setBusy(true);
     try {
-      const s = await parsePdfFile(f);
-      if (s.semester && s.semester !== sem) {
-        setMisplaced(s);
+      // DigiLocker Statement of Grade (PDF with grade/credit columns) → exact, verified route.
+      let digilocker: ParsedSheet | null = null;
+      if (isPdfFile(f)) {
+        try {
+          const s = await parsePdfFile(f);
+          if (s.subjects.some((x) => x.credits != null && x.grade)) digilocker = s;
+        } catch {
+          /* not a DigiLocker sheet: try it as a result page below */
+        }
+      }
+      if (digilocker) {
+        if (digilocker.semester && digilocker.semester !== sem) setMisplaced(digilocker);
+        else setInput({ sheet: digilocker, method: 'pdf' });
+      } else if (isImageFile(f) || isPdfFile(f)) {
+        // College result page (screenshot, photo or saved PDF): read the CIA / ESE / TOTAL table.
+        const { kind, result } = await readMarksTable(f, setProgress, prevTargets(sem), KNOWN_PREV_CODES[sem]);
+        const filled = Object.fromEntries(Object.entries(result.marks).map(([id, m]) => [id, m.confidence]));
+        if (!Object.keys(filled).length) {
+          setError(`We couldn't find your Sem ${sem} papers in that file. Make sure the subject codes and marks are visible, or type them in.`);
+        } else {
+          setInput({
+            method: 'manual',
+            manualMode: 'detailed',
+            detailed: { ...input.detailed, ...Object.fromEntries(Object.entries(result.marks).map(([id, m]) => [id, String(m.total)])) },
+            imported: { kind, filled, missing: result.missing },
+          });
+          if (result.regNo || result.studentName) update((st) => ({ ...st, cardReg: st.cardReg || (result.regNo ?? '').toUpperCase(), cardName: st.cardName || titleCase(result.studentName ?? '') }));
+        }
       } else {
-        setInput({ sheet: s, method: 'pdf' });
+        throw new FriendlyParseError('Upload the DigiLocker PDF, or a screenshot of your result page.');
       }
     } catch (e) {
       setError(e instanceof FriendlyParseError ? e.message : "Something went wrong reading that file. Try again, or type your SGPA in.");
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -119,6 +148,11 @@ function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
   return (
     <div className="space-y-3">
       {!sheet && <UploadDropzone onFile={handle} busy={busy} sem={sem} />}
+      {busy && progress && (
+        <p className="text-center text-[13.5px] text-muted tabular" role="status">
+          {progress.stage === 'checking' ? 'Reading each mark carefully…' : progress.stage === 'loading-model' ? 'Getting the reader ready. First time only…' : 'Finding the table…'} {Math.round(progress.progress * 100)}%
+        </p>
+      )}
       {error && (
         <Notice
           tone="error"
@@ -252,6 +286,19 @@ function ManualPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
         </div>
       ) : (
         <div>
+          {input.imported && (
+            <div className="mb-3">
+              <Notice tone={input.imported.missing.length || Object.values(input.imported.filled).includes('check') ? 'warn' : 'ok'}>
+                <p className="font-semibold">
+                  Filled {Object.keys(input.imported.filled).length} of {counted.length} papers from your {input.imported.kind === 'photo' ? 'screenshot' : 'PDF'}.
+                </p>
+                <p className="mt-0.5 text-muted">
+                  Highlighted boxes came from the file; check any marked for checking against your sheet.
+                  {input.imported.missing.length > 0 && <> Still to type: {input.imported.missing.map((id) => counted.find((c) => c.id === id)?.name ?? id).join(', ')}.</>}
+                </p>
+              </Notice>
+            </div>
+          )}
           <ul className="divide-y divide-line">
             {counted.map((s) => {
               const v = input.detailed[s.id] ?? '';
@@ -262,7 +309,21 @@ function ManualPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
                     <p className="text-[14.5px] font-semibold text-fg">{s.name}</p>
                     <span className="shrink-0 text-[12px] text-muted tabular">{s.credits} cr</span>
                   </div>
-                  <MarkInput id={`d-${sem}-${s.id}`} label={`${s.name} total`} hideLabel value={v} max={s.totalMax} error={p.error ?? undefined} onChange={(nv) => setInput({ detailed: { ...input.detailed, [s.id]: nv } })} placeholder="Total…" />
+                  <MarkInput
+                    id={`d-${sem}-${s.id}`}
+                    label={`${s.name} total`}
+                    hideLabel
+                    value={v}
+                    max={s.totalMax}
+                    error={p.error ?? undefined}
+                    imported={input.imported?.filled[s.id]}
+                    onChange={(nv) => {
+                      const filled = input.imported ? { ...input.imported.filled } : null;
+                      if (filled) delete filled[s.id];
+                      setInput({ detailed: { ...input.detailed, [s.id]: nv }, imported: input.imported && filled ? { ...input.imported, filled } : input.imported });
+                    }}
+                    placeholder="Total…"
+                  />
                 </li>
               );
             })}
@@ -289,12 +350,12 @@ export function PrevSemStep({ sem, onNext, onBack }: { sem: SemNo; onNext: () =>
           value={input.method}
           onChange={(v) => setInput({ method: v })}
           options={[
-            { value: 'pdf', label: 'DigiLocker PDF' },
+            { value: 'pdf', label: 'Upload result' },
             { value: 'manual', label: 'Type it in' },
           ]}
         />
         <p className="mt-3 text-[13px] text-muted">
-          {input.method === 'pdf' ? `Best option: we read every paper from your ${month} sheet and check it against the printed SGPA.` : `Have your ${month} marksheet handy.`}
+          {input.method === 'pdf' ? `A screenshot of your ${month} result page, or the DigiLocker PDF (checked against its printed SGPA).` : `Have your ${month} marksheet handy.`}
         </p>
         <div className="mt-4">{input.method === 'pdf' ? <UploadPane sem={sem} input={input} setInput={setInput} /> : <ManualPane sem={sem} input={input} setInput={setInput} />}</div>
       </Card>
@@ -316,4 +377,8 @@ export function PrevSemStep({ sem, onNext, onBack }: { sem: SemNo; onNext: () =>
       </div>
     </div>
   );
+}
+
+function titleCase(s: string) {
+  return s.toLowerCase().replace(/([a-z])/g, (m) => m.toUpperCase());
 }

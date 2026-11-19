@@ -1,8 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import { Camera, FileUp, ImageUp, RotateCcw } from 'lucide-react';
 import { useStore, type Sem3Source } from '../state/store';
-import { importSem3 } from '../lib/sem3Import';
-import { readMarksFile, type ReadProgress } from '../lib/readMarks';
+import { readMarksTable, type ReadProgress } from '../lib/readMarks';
 import { FriendlyParseError } from '../lib/pdfParser';
 import { emptyMark } from '../lib/sem3';
 import { SEM3_SUBJECTS } from '../data/subjects';
@@ -47,7 +46,8 @@ export function SourcePicker() {
 const STAGE_TEXT: Record<ReadProgress['stage'], string> = {
   opening: 'Opening your file…',
   'loading-model': 'Getting the reader ready. First time only…',
-  reading: 'Reading your marks…',
+  reading: 'Finding the table…',
+  checking: 'Reading each mark carefully…',
   done: 'Done',
 };
 
@@ -67,8 +67,7 @@ export function ImportPane({ kind }: { kind: 'photo' | 'pdf' }) {
     setNothing(false);
     setProgress({ stage: 'opening', progress: 0.03 });
     try {
-      const { kind: k, items } = await readMarksFile(file, setProgress);
-      const r = importSem3(items);
+      const { kind: k, result: r } = await readMarksTable(file, setProgress);
       const found = Object.keys(r.marks);
       if (!found.length) {
         setNothing(true);

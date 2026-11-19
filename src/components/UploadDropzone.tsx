@@ -41,7 +41,7 @@ export function UploadDropzone({ onFile, busy, sem }: { onFile: (f: File) => voi
       {busy ? (
         <span aria-live="polite">
           <ScanningSheet progress={0.6} />
-          <span className="mt-4 block text-[15.5px] font-semibold text-fg">Reading your Statement of Grade…</span>
+          <span className="mt-4 block text-[15.5px] font-semibold text-fg">Reading your result…</span>
           <span className="mt-1 block text-[13.5px] text-muted">On your phone. Nothing is uploaded.</span>
         </span>
       ) : (
@@ -49,8 +49,8 @@ export function UploadDropzone({ onFile, busy, sem }: { onFile: (f: File) => voi
           <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border-[1.5px] border-fg bg-marker text-on-marker shadow-[3px_3px_0_0_var(--offset)]">
             <FileUp size={24} aria-hidden="true" />
           </span>
-          <span className="mt-4 font-display text-[19px] font-bold tracking-[-0.01em] text-fg">Add your Sem {sem} PDF</span>
-          <span className="mt-1 max-w-xs text-[14px] leading-snug text-muted">The Statement of Grade from DigiLocker. Tap to choose it, or drag it here.</span>
+          <span className="mt-4 font-display text-[19px] font-bold tracking-[-0.01em] text-fg">Add your Sem {sem} result</span>
+          <span className="mt-1 max-w-xs text-[14px] leading-snug text-muted">A screenshot of the result page, or the DigiLocker PDF. Tap to choose it, or drag it here.</span>
         </>
       )}
     </label>

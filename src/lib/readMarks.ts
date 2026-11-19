@@ -1,73 +1,106 @@
 /**
- * Turn an uploaded PDF or photo into positioned text, entirely in the browser.
- * PDFs use their text layer (pdf.js). Photos and screenshots go through tesseract.js OCR.
+ * Read a marks table from an uploaded PDF or image, entirely in the browser.
+ *  - PDF: its text layer (pdf.js).
+ *  - Image: two-pass OCR (tesseract.js): find rows/columns (and table grid lines if ruled),
+ *    then re-read every marks cell digits-only and let CIA + ESE = TOTAL referee.
  * The image never leaves the device; the first photo downloads the OCR model (~4 MB) once.
  */
 import { FriendlyParseError, isPdfFile, loadPdfItems, type PositionedText } from './pdfParser';
-import { cleanForOcr } from './imagePrep';
+import { enhanceCell, OCR_PARAMS, prepareForOcr, type OcrWord, type Raster } from './imagePrep';
+import { detectGrid } from './grid';
+import { readSem3FromImage, type OcrEngine } from './ocrTable';
+import { importSem3, KNOWN_SEM3_CODES, TARGETS, type Sem3ImportResult, type Target } from './sem3Import';
 
-export type ReadStage = 'opening' | 'loading-model' | 'reading' | 'done';
+export type ReadStage = 'opening' | 'loading-model' | 'reading' | 'checking' | 'done';
 export interface ReadProgress {
   stage: ReadStage;
   /** 0–1 */
   progress: number;
 }
 
-export async function readMarksFile(file: File, onProgress: (p: ReadProgress) => void): Promise<{ kind: 'pdf' | 'photo'; items: PositionedText[] }> {
+export const isImageFile = (file: File) => file.type.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(file.name);
+
+/** PDF text items (for DigiLocker parsing and text-layer tables). */
+export async function readPdfItems(file: File): Promise<PositionedText[]> {
+  const items = await loadPdfItems(file);
+  if (items.length < 5) throw new FriendlyParseError('This PDF is a scan with no text inside. Upload a screenshot of it instead, or type your marks.');
+  return items;
+}
+
+/** Any marks table (PDF or image) → marks for the given subjects. */
+export async function readMarksTable(
+  file: File,
+  onProgress: (p: ReadProgress) => void,
+  targets: Target[] = TARGETS,
+  known: string[] = KNOWN_SEM3_CODES,
+): Promise<{ kind: 'pdf' | 'photo'; result: Sem3ImportResult }> {
   onProgress({ stage: 'opening', progress: 0.05 });
   if (isPdfFile(file)) {
-    const items = await loadPdfItems(file);
-    if (items.length < 5) throw new FriendlyParseError("This PDF is a scan with no text inside. Take a photo of it instead, or type your marks.");
+    const items = await readPdfItems(file);
     onProgress({ stage: 'done', progress: 1 });
-    return { kind: 'pdf', items };
+    return { kind: 'pdf', result: importSem3(items, targets) };
   }
-  if (!file.type.startsWith('image/') && !/\.(png|jpe?g|webp|heic|heif)$/i.test(file.name)) {
-    throw new FriendlyParseError('Use a photo, a screenshot, or a PDF of your result.');
-  }
-  const canvas = await prepareImage(file);
-  onProgress({ stage: 'loading-model', progress: 0.1 });
+  if (!isImageFile(file)) throw new FriendlyParseError('Use a screenshot, a photo, or a PDF of your result.');
+
+  const raster = prepareForOcr(await decodeImage(file));
+  const grid = detectGrid(raster);
+  onProgress({ stage: 'loading-model', progress: 0.12 });
   const { createWorker } = await import('tesseract.js');
+  let phase: 'page' | 'cells' = 'page';
+  let cellsRead = 0;
   const worker = await createWorker('eng', 1, {
     logger: (m: { status: string; progress: number }) => {
-      if (m.status === 'recognizing text') onProgress({ stage: 'reading', progress: 0.35 + m.progress * 0.6 });
-      else if (/loading|initializ/i.test(m.status)) onProgress({ stage: 'loading-model', progress: 0.1 + m.progress * 0.25 });
+      if (phase === 'page' && m.status === 'recognizing text') onProgress({ stage: 'reading', progress: 0.3 + m.progress * 0.3 });
+      else if (phase === 'page' && /loading|initializ/i.test(m.status)) onProgress({ stage: 'loading-model', progress: 0.12 + m.progress * 0.18 });
     },
   });
+  const pageCanvas = toCanvas(raster);
+  const engine: OcrEngine = {
+    async page() {
+      await worker.setParameters({ ...OCR_PARAMS, tessedit_char_whitelist: '' } as never);
+      const { data } = await worker.recognize(pageCanvas);
+      phase = 'cells';
+      return (data.words ?? []) as OcrWord[];
+    },
+    async line(rect, whitelist) {
+      if (rect.width < 6 || rect.height < 6) return '';
+      await worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: whitelist } as never);
+      const { data } = await worker.recognize(toCanvas(enhanceCell(raster, rect)));
+      cellsRead++;
+      onProgress({ stage: 'checking', progress: Math.min(0.97, 0.6 + cellsRead * 0.009) });
+      return data.text;
+    },
+  };
   try {
-    await worker.setParameters({ preserve_interword_spaces: '1', tessedit_pageseg_mode: '6' as never });
-    const { data } = await worker.recognize(canvas);
-    const items: PositionedText[] = (data.words ?? [])
-      .filter((w) => w.text.trim() && w.confidence > 20)
-      .map((w) => ({ str: w.text, x: w.bbox.x0, y: -w.bbox.y0, w: w.bbox.x1 - w.bbox.x0, h: w.bbox.y1 - w.bbox.y0 }));
+    const result = await readSem3FromImage(engine, grid, targets, known);
     onProgress({ stage: 'done', progress: 1 });
-    if (items.length < 5) throw new FriendlyParseError("We couldn't read text in this photo. Try again in good light, holding the phone straight over the page.");
-    return { kind: 'photo', items };
+    return { kind: 'photo', result };
   } finally {
     await worker.terminate();
   }
 }
 
-/** Resize so text is ~30px tall, then threshold and strip table lines: much better OCR on result pages. */
-async function prepareImage(file: File): Promise<HTMLCanvasElement> {
+async function decodeImage(file: File): Promise<Raster> {
   let bmp: ImageBitmap;
   try {
     bmp = await createImageBitmap(file);
   } catch {
     throw new FriendlyParseError("This image format can't be opened here. Take a screenshot of it and upload that instead.");
   }
-  const maxSide = 2600;
-  const minSide = 2000;
-  const longest = Math.max(bmp.width, bmp.height);
-  const scale = longest > maxSide ? maxSide / longest : longest < minSide ? minSide / longest : 1;
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bmp.width * scale);
-  canvas.height = Math.round(bmp.height * scale);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const c = document.createElement('canvas');
+  c.width = bmp.width;
+  c.height = bmp.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(bmp, 0, 0);
   bmp.close();
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  cleanForOcr(img.data, canvas.width, canvas.height);
-  ctx.putImageData(img, 0, 0);
-  return canvas;
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  return { data: img.data, width: img.width, height: img.height };
+}
+
+function toCanvas(r: Raster): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = r.width;
+  c.height = r.height;
+  c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(r.data), r.width, r.height), 0, 0);
+  return c;
 }

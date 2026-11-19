@@ -14,6 +14,8 @@ export interface PrevSemInput {
   detailed: Record<string, string>;
   detailedCredits: Record<string, number>;
   sheet: ParsedSheet | null;
+  /** Marks filled from a result-page screenshot/PDF: which ones to double-check. */
+  imported?: { kind: 'photo' | 'pdf'; filled: Record<string, 'high' | 'check'>; missing: string[] } | null;
 }
 
 export function defaultPrevInput(sem: SemNo): PrevSemInput {

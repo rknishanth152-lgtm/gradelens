@@ -129,3 +129,14 @@ describe('normalizeCode, more OCR slips', () => {
     expect(normalizeCode('25CTUDY')).toBe('25CTU01');
   });
 });
+
+describe('matchCode', () => {
+  it('snaps garbled codes to the closest real one', async () => {
+    const { matchCode } = await import('../lib/sem3Import');
+    expect(matchCode('25CSSO00A')).toBe('25CSS06A');
+    expect(matchCode('250SS00B')).toBe('25CSS06B');
+    expect(matchCode('29SSO7B')).toBe('25CSS07B');
+    expect(matchCode('25MCU22')).toBe('25MCU22');
+    expect(matchCode('RELATIONAL')).toBeNull();
+  });
+});

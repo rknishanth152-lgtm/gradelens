@@ -184,8 +184,8 @@ export function CgpaFlow() {
   }, [safeStep]);
 
   const titles = [
-    ['Semester 1', 'Your Nov 2025 Statement of Grade, or just the SGPA printed on it.'],
-    ['Semester 2', 'Your Apr 2026 Statement of Grade, or just the SGPA printed on it.'],
+    ['Semester 1', 'A screenshot of your Nov 2025 result, the DigiLocker PDF, or just your SGPA.'],
+    ['Semester 2', 'A screenshot of your Apr 2026 result, the DigiLocker PDF, or just your SGPA.'],
     ['Semester 3', "Your Oct 2026 marks. If you've already added them, they're here."],
     ['Your CGPA', ''],
   ];
