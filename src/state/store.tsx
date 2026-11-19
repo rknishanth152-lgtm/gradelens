@@ -53,7 +53,8 @@ function load(): AppState {
     const raw = localStorage.getItem(KEY);
     if (!raw) return withHash(base);
     const s = JSON.parse(raw) as Partial<AppState>;
-    return withHash({
+    if (!s || typeof s !== 'object') return withHash(base);
+    const merged: AppState = {
       ...base,
       ...s,
       sem3: { ...base.sem3, ...(s.sem3 ?? {}) },
@@ -61,10 +62,63 @@ function load(): AppState {
         1: { ...base.prev[1], ...(s.prev?.[1] ?? {}) },
         2: { ...base.prev[2], ...(s.prev?.[2] ?? {}) },
       },
-    });
+    };
+    return withHash(sanitize(merged, base));
   } catch {
     return withHash(base);
   }
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+
+/** Repair anything odd in saved data (older versions, hand edits) instead of crashing on it. */
+function sanitize(s: AppState, base: AppState): AppState {
+  const marks: AppState['sem3']['marks'] = {};
+  if (isObj(s.sem3.marks)) {
+    for (const [k, m] of Object.entries(s.sem3.marks)) {
+      if (isObj(m)) marks[k] = { cia: str(m.cia), ese: str(m.ese), total: str(m.total) };
+    }
+  }
+  const prev = (n: 1 | 2) => {
+    const p = s.prev[n];
+    const raw = isObj(p.sheet) && Array.isArray((p.sheet as { subjects?: unknown }).subjects) ? p.sheet : null;
+    const subjects = raw ? raw.subjects.filter((x) => isObj(x) && typeof x.code === 'string') : [];
+    const sheet = raw && subjects.length ? { ...raw, subjects, warnings: Array.isArray(raw.warnings) ? raw.warnings : [] } : null;
+    return {
+      ...p,
+      method: p.method === 'manual' ? 'manual' : 'pdf',
+      manualMode: p.manualMode === 'detailed' ? 'detailed' : 'quick',
+      quickSgpa: str(p.quickSgpa),
+      quickCredits: typeof p.quickCredits === 'number' && p.quickCredits > 0 ? p.quickCredits : base.prev[n].quickCredits,
+      detailed: isObj(p.detailed) ? Object.fromEntries(Object.entries(p.detailed).map(([k, v]) => [k, str(v)])) : {},
+      detailedCredits: isObj(p.detailedCredits) ? (p.detailedCredits as Record<string, number>) : {},
+      sheet,
+    } as PrevSemInput;
+  };
+  return {
+    ...s,
+    view: s.view === 'sgpa' || s.view === 'cgpa' ? s.view : 'landing',
+    sem3Source: s.sem3Source === 'photo' || s.sem3Source === 'pdf' ? s.sem3Source : 'type',
+    sem3Import: isObj(s.sem3Import) && isObj(s.sem3Import.filled) && Array.isArray(s.sem3Import.missing) ? s.sem3Import : null,
+    cgpaStep: Number.isInteger(s.cgpaStep) ? Math.min(3, Math.max(0, s.cgpaStep)) : 0,
+    plannerTarget: typeof s.plannerTarget === 'number' && s.plannerTarget >= 5 && s.plannerTarget <= 10 ? s.plannerTarget : 8,
+    futureCredits: typeof s.futureCredits === 'number' && s.futureCredits > 0 ? s.futureCredits : base.futureCredits,
+    cardName: str(s.cardName),
+    cardReg: str(s.cardReg),
+    sem3: {
+      ...s.sem3,
+      marks,
+      credits: isObj(s.sem3.credits) ? (s.sem3.credits as Record<string, number>) : {},
+      electiveCode: str(s.sem3.electiveCode) || base.sem3.electiveCode,
+      mdcCode: str(s.sem3.mdcCode) || base.sem3.mdcCode,
+      mdcOtherName: str(s.sem3.mdcOtherName),
+      nptelName: str(s.sem3.nptelName),
+      totalOnly: s.sem3.totalOnly !== false,
+      nptelOn: s.sem3.nptelOn === true,
+    },
+    prev: { 1: prev(1), 2: prev(2) },
+  };
 }
 
 function hashView(): View | null {

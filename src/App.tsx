@@ -1,6 +1,7 @@
 import { MotionConfig, motion } from 'framer-motion';
 import { StoreProvider, useStore } from './state/store';
 import { Footer, Header } from './components/Shell';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Landing } from './pages/Landing';
 import { SgpaFlow } from './pages/SgpaFlow';
 import { CgpaFlow } from './pages/CgpaFlow';
@@ -20,6 +21,7 @@ function Routes() {
 export default function App() {
   return (
     <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
       <StoreProvider>
         <a href="#main" className="sr-only z-50 rounded-xl bg-surface px-4 py-2 text-fg focus:not-sr-only focus:fixed focus:left-3 focus:top-3">
           Skip to content
@@ -32,6 +34,7 @@ export default function App() {
           <Footer />
         </div>
       </StoreProvider>
+      </ErrorBoundary>
     </MotionConfig>
   );
 }
