@@ -207,7 +207,7 @@ export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = n
   const base = importSem3(items, targets); // pass-1 result, used as a fallback and for reg no / name
   // Header not readable (e.g. "TOTALRESULT" glued)? On a ruled sheet the last four columns are
   // CIA | ESE | TOTAL | RESULT in this college's layout, so take them from the grid.
-  const cols = findMarkColumns(words) ?? (grid ? columnsFromGrid(grid) : null);
+  const cols = findMarkColumns(words) ?? (grid ? columnsFromGrid(grid) : null) ?? columnsFromRows(words, known);
   if (!cols) return base;
   // Ruled table: read cell by cell between the grid lines first.
   const fromGrid = grid ? await readSem3FromGrid(engine, cols, grid, targets, known) : null;
@@ -297,6 +297,54 @@ export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = n
   }
   result.missing = targets.map((t) => t.id).filter((id) => !result.marks[id]);
   return crossCheck(fromGrid ? { ...mergeResults(fromGrid, result, targets), regNo: base.regNo, studentName: base.studentName } : result, base, targets);
+}
+
+/**
+ * Last resort when the CIA / ESE / TOTAL header can't be read (small white-on-colour text) and the
+ * table has no ruled lines: on each subject row the first two numbers are CIA and ESE, and TOTAL
+ * sits between ESE and the PASS badge. Only used when nothing else found the columns.
+ */
+export function columnsFromRows(words: OcrWord[], known: string[]): MarkColumns | null {
+  const median = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  const rowsByCode = words.filter((w) => matchCode(w.text, known));
+  if (rowsByCode.length < 3) return null;
+  const firsts: number[] = [];
+  const seconds: number[] = [];
+  const passes: number[] = [];
+  const heights: number[] = [];
+  for (const code of rowsByCode) {
+    const h = code.bbox.y1 - code.bbox.y0;
+    const same = words.filter((w) => Math.abs(w.bbox.y0 - code.bbox.y0) < h * 0.8 && w.bbox.x0 > code.bbox.x1).sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    const nums = same.filter((w) => /^\d{1,3}$/.test(w.text.trim()));
+    const pass = same.find((w) => /^(PASS|FAIL)$/i.test(letters(w.text)));
+    if (pass) passes.push(pass.bbox.x0);
+    if (nums.length >= 2) {
+      firsts.push((nums[0].bbox.x0 + nums[0].bbox.x1) / 2);
+      seconds.push((nums[1].bbox.x0 + nums[1].bbox.x1) / 2);
+    }
+    heights.push(h);
+  }
+  if (firsts.length < 3) return null;
+  const cia = median(firsts);
+  const ese = median(seconds);
+  const g = ese - cia;
+  if (!(g > 0)) return null;
+  const passX = passes.length >= 3 ? median(passes) : ese + g * 2;
+  const totLeft = ese + g * 0.5;
+  const totRight = Math.max(totLeft + g * 0.8, passX - g * 0.1);
+  const top = Math.min(...rowsByCode.map((w) => w.bbox.y0)) - median(heights);
+  return {
+    left: Math.round(cia - g * 0.5),
+    right: Math.round(totRight),
+    headerTop: top,
+    headerBottom: top,
+    centres: [cia, ese, (totLeft + totRight) / 2],
+    cells: [
+      { key: 'cia', left: Math.round(cia - g * 0.5), width: Math.round(g) },
+      { key: 'ese', left: Math.round(ese - g * 0.5), width: Math.round(g) },
+      { key: 'tot', left: Math.round(totLeft), width: Math.round(totRight - totLeft) },
+    ],
+  };
 }
 
 export function columnsFromGrid(grid: Grid): MarkColumns | null {
