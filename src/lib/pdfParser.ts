@@ -217,7 +217,7 @@ export function parseItems(items: PositionedText[], fileName = ''): ParsedSheet 
     for (const it of l.items) {
       for (const m of it.str.matchAll(CODE_RE)) {
         const code = m[0];
-        // Skip register numbers (25BCT040 doesn't match the code shape, but be safe).
+        // Skip register numbers (25BCT999 doesn't match the code shape, but be safe).
         if (/^\d{2}[A-Z]{3}\d{3}$/.test(code)) continue;
         if (anchors.some((a) => a.code === code && Math.abs(a.y - l.y) <= tol)) continue;
         const x = it.x + (it.w * (m.index ?? 0)) / Math.max(it.str.length, 1);

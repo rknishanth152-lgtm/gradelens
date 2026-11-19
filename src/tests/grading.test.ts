@@ -25,10 +25,10 @@ const STUDENTS: Array<{
   total: number;
   pct: string;
 }> = [
-  { reg: '25BCT040', marks: ['', 32, 43, 32, 49, 28, 63, 75, 60, 83], sem1: [89.8, 12], sem2: [121.0, 15], sgpa: '6.78', cgpa: '7.38', total: 405, pct: '73.64' },
-  { reg: '25BCT008', marks: ['', 41, 46, 36, 48, 39, 67, 59, 77, 75], sem1: [70.8, 12], sem2: [105.8, 15], sgpa: '7.35', cgpa: '6.88', total: 411, pct: '74.73' },
-  { reg: '25BCT044', marks: ['', 33, 37, 30, 36, 27, 48, 42, 59, 64], sem1: [55.4, 12], sem2: [73.8, 15], sgpa: '5.59', cgpa: '5.12', total: 317, pct: '57.64' },
-  { reg: '25BCT006', marks: ['', 44, 45, 41, 35, 44, 81, 78, 70, 67], sem1: [90.4, 12], sem2: [104.3, 15], sgpa: '8.11', cgpa: '7.58', total: 435, pct: '79.09' },
+  { reg: 'Student A', marks: ['', 32, 43, 32, 49, 28, 63, 75, 60, 83], sem1: [89.8, 12], sem2: [121.0, 15], sgpa: '6.78', cgpa: '7.38', total: 405, pct: '73.64' },
+  { reg: 'Student B', marks: ['', 41, 46, 36, 48, 39, 67, 59, 77, 75], sem1: [70.8, 12], sem2: [105.8, 15], sgpa: '7.35', cgpa: '6.88', total: 411, pct: '74.73' },
+  { reg: 'Student C', marks: ['', 33, 37, 30, 36, 27, 48, 42, 59, 64], sem1: [55.4, 12], sem2: [73.8, 15], sgpa: '5.59', cgpa: '5.12', total: 317, pct: '57.64' },
+  { reg: 'Student D', marks: ['', 44, 45, 41, 35, 44, 81, 78, 70, 67], sem1: [90.4, 12], sem2: [104.3, 15], sgpa: '8.11', cgpa: '7.58', total: 435, pct: '79.09' },
 ];
 
 const IDS = ['rdbms', 'sql', 'se', 'testing', 'iot', 'elective', 'or', 'mdc', 'capstone'];
@@ -78,12 +78,12 @@ describe('Sem 3 SGPA, CGPA and percentage (section 9)', () => {
     });
   }
 
-  it('25BCT040 credit points = 128.9', () => {
+  it('Student A credit points = 128.9', () => {
     const r = computeSem3(sem3Input(STUDENTS[0].marks));
     expect(r.totals.creditPoints).toBeCloseTo(128.9, 6);
   });
 
-  it('NPTEL on, 2 credits, 80/100 for 25BCT040', () => {
+  it('NPTEL on, 2 credits, 80/100 for Student A', () => {
     const r = computeSem3(
       sem3Input(STUDENTS[0].marks, { nptelOn: true, marks: { nptel: { cia: '', ese: '', total: '80' } } }),
     );
@@ -173,7 +173,7 @@ describe('roundHalfUp', () => {
 });
 
 describe('targetPlanner', () => {
-  it('25BCT008 needs ≈ 8.91 for an 8.0 CGPA', () => {
+  it('Student B needs ≈ 8.91 for an 8.0 CGPA', () => {
     const p = targetPlanner({ currentCP: 316.3, currentCredits: 46, target: 8, remainingSems: 3, creditsPerSem: 19 });
     expect(p.final.sem).toBe(6);
     expect(fmt(p.final.required, 2)).toBe('8.91');
@@ -181,7 +181,7 @@ describe('targetPlanner', () => {
     expect(p.horizons).toHaveLength(3);
   });
 
-  it('25BCT044 cannot reach 8.0; max ≈ 7.82', () => {
+  it('Student C cannot reach 8.0; max ≈ 7.82', () => {
     const p = targetPlanner({ currentCP: 235.4, currentCredits: 46, target: 8, remainingSems: 3, creditsPerSem: 19 });
     expect(p.final.reachable).toBe(false);
     expect(fmt(p.final.maxAchievable, 2)).toBe('7.82');

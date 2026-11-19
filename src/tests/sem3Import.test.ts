@@ -10,7 +10,7 @@ const def = (id: string) => SEM3_SUBJECTS.find((s) => s.id === id)!;
 
 /** A college result page row: S.No, code, name, CIA, ESE, total, result. */
 function page(rows: Array<[string, string, string, string, string, string]>, withMax = false): PositionedText[] {
-  const items: PositionedText[] = [t('Register No : 25BCT040', 20, 900), t('Name : ARJUN K', 300, 900), t('Code', 40, 860), t('Subject', 120, 860), t('CIA', 420, 860), t('ESE', 470, 860), t('Total', 520, 860)];
+  const items: PositionedText[] = [t('Register No : 25BCT999', 20, 900), t('Name : ARJUN K', 300, 900), t('Code', 40, 860), t('Subject', 120, 860), t('CIA', 420, 860), t('ESE', 470, 860), t('Total', 520, 860)];
   rows.forEach(([code, name, cia, ese, total, res], i) => {
     const y = 840 - i * 24;
     items.push(t(String(i + 1), 10, y), t(code, 40, y), t(name, 120, y));
@@ -57,7 +57,7 @@ describe('normalizeCode', () => {
   });
   it('rejects non-codes', () => {
     expect(normalizeCode('Software')).toBeNull();
-    expect(normalizeCode('25BCT040')).toBeNull();
+    expect(normalizeCode('25BCT999')).toBeNull();
     expect(normalizeCode('32')).toBeNull();
   });
 });
@@ -80,7 +80,7 @@ describe('importSem3 from a result-page table', () => {
     expect(r.marks.capstone.total).toBe(83);
     expect(r.electiveCode).toBe('25CTU02');
     expect(r.mdcCode).toBe('25MDC27');
-    expect(r.regNo).toBe('25BCT040');
+    expect(r.regNo).toBe('25BCT999');
     const s = computeSem3(toInput(r));
     expect(fmt(s.totals.sgpa, 2)).toBe('6.78');
     expect(s.percentObtained).toBe(405);

@@ -20,7 +20,7 @@ function header(sem: string, sgpa: string, cgpa: string): PositionedText[] {
     t('SRI KRISHNA ARTS AND SCIENCE COLLEGE', 150, 800),
     t('STATEMENT OF GRADE', 200, 785),
     t('Name : ARJUN K', 40, 760),
-    t('Reg. No : 25BCT040', 330, 760),
+    t('Reg. No : 25BCT999', 330, 760),
     t(`Semester : ${sem}`, 40, 745),
     t('NOVEMBER 2025', 330, 745),
     t('Sem', 15, 720), t('Course Code', 40, 720), t('Course Title', 100, 720),
@@ -32,7 +32,7 @@ function header(sem: string, sgpa: string, cgpa: string): PositionedText[] {
   ];
 }
 
-// 25BCT040-style Sem 1: counted CP 89.8 / 12 → 7.5
+// 25BCT999-style Sem 1: counted CP 89.8 / 12 → 7.5
 const SEM1_ITEMS: PositionedText[] = [
   ...header('I', '7.5', '7.5'),
   ...row(700, '25AEC01', 'Tamil - I', [60, 24, 40, 40, 16, 30, 100, 40, 70, 'A', 7.0, 3, 21.0, 'PASS']),
@@ -53,11 +53,11 @@ describe('groupLines', () => {
 });
 
 describe('parseItems (synthetic Statement of Grade)', () => {
-  const sheet = parseItems(SEM1_ITEMS, 'skasctn-DGMST-202525BCT040INOVEMBER.pdf');
+  const sheet = parseItems(SEM1_ITEMS, 'skasctn-DGMST-202525BCT999INOVEMBER.pdf');
 
   it('reads the header', () => {
     expect(sheet.studentName).toBe('ARJUN K');
-    expect(sheet.regNo).toBe('25BCT040');
+    expect(sheet.regNo).toBe('25BCT999');
     expect(sheet.semester).toBe(1);
     expect(sheet.examMonth).toBe('November 2025');
     expect(sheet.printedSgpa).toBe(7.5);
@@ -85,7 +85,7 @@ describe('parseItems (synthetic Statement of Grade)', () => {
 
   it('detects the semester from the filename or codes when the header lacks it', () => {
     const noSem = SEM1_ITEMS.filter((i) => !i.str.startsWith('Semester'));
-    expect(parseItems(noSem, 'skasctn-DGMST-202625BCT040IIAPRIL.pdf').semester).toBe(2);
+    expect(parseItems(noSem, 'skasctn-DGMST-202625BCT999IIAPRIL.pdf').semester).toBe(2);
     expect(parseItems(noSem, 'marks.pdf').semester).toBe(1);
   });
 
