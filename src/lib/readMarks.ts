@@ -61,14 +61,22 @@ export async function readMarksTable(
   opts: { statement?: boolean } = {},
 ): Promise<{ kind: 'pdf' | 'photo'; result: Sem3ImportResult; printedSgpa?: number | null; verified?: boolean }> {
   onProgress({ stage: 'opening', progress: 0.05 });
+  let source: Raster;
   if (isPdfFile(file)) {
-    const items = await readPdfItems(file);
-    onProgress({ stage: 'done', progress: 1 });
-    return { kind: 'pdf', result: importSem3(items, targets) };
+    const items = await loadPdfItems(file);
+    if (items.length >= 5) {
+      onProgress({ stage: 'done', progress: 1 });
+      return { kind: 'pdf', result: importSem3(items, targets) };
+    }
+    // A picture saved as PDF (scanner apps, "JPG to PDF" sites): render the page and read it like a photo.
+    source = await renderPdfPage(file);
+  } else if (isImageFile(file)) {
+    source = await decodeImage(file);
+  } else {
+    throw new FriendlyParseError('Use a screenshot, a photo, or a PDF of your result.');
   }
-  if (!isImageFile(file)) throw new FriendlyParseError('Use a screenshot, a photo, or a PDF of your result.');
 
-  const raster = prepareForOcr(await decodeImage(file));
+  const raster = prepareForOcr(source);
   const grid = detectGrid(raster);
   onProgress({ stage: 'loading-model', progress: 0.12 });
   const paddleLoading = loadPaddle();
@@ -121,6 +129,30 @@ export async function readMarksTable(
     return { kind: 'photo', result };
   } finally {
     await worker.terminate();
+  }
+}
+
+/** Render page 1 of an image-only PDF to pixels (~2200px wide). */
+async function renderPdfPage(file: File): Promise<Raster> {
+  const [pdfjs, worker] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')]);
+  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+  try {
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const page = await doc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(4, Math.max(1, 2200 / base.width)) });
+    const c = document.createElement('canvas');
+    c.width = Math.round(viewport.width);
+    c.height = Math.round(viewport.height);
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport } as never).promise;
+    await doc.destroy();
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    return { data: img.data, width: img.width, height: img.height };
+  } catch {
+    throw new FriendlyParseError("This PDF wouldn't open. Take a screenshot of it and upload that instead.");
   }
 }
 
