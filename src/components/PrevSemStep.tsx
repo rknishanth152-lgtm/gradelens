@@ -113,7 +113,7 @@ function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
         else setInput({ sheet: digilocker, method: 'pdf' });
       } else if (isImageFile(f) || isPdfFile(f)) {
         // College result page (screenshot, photo or saved PDF): read the CIA / ESE / TOTAL table.
-        const { kind, result } = await readMarksTable(f, setProgress, prevTargets(sem), KNOWN_PREV_CODES[sem]);
+        const { kind, result, printedSgpa, verified } = await readMarksTable(f, setProgress, prevTargets(sem), KNOWN_PREV_CODES[sem], { statement: true });
         const filled = Object.fromEntries(Object.entries(result.marks).map(([id, m]) => [id, m.confidence]));
         if (!Object.keys(filled).length) {
           setError(`We couldn't find your Sem ${sem} papers in that file. Make sure the subject codes and marks are visible, or type them in.`);
@@ -122,7 +122,7 @@ function UploadPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
             method: 'manual',
             manualMode: 'detailed',
             detailed: { ...input.detailed, ...Object.fromEntries(Object.entries(result.marks).map(([id, m]) => [id, String(m.total)])) },
-            imported: { kind, filled, missing: result.missing },
+            imported: { kind, filled, missing: result.missing, verifiedSgpa: verified ? printedSgpa ?? null : null },
           });
           if (result.regNo || result.studentName) update((st) => ({ ...st, cardReg: st.cardReg || (result.regNo ?? '').toUpperCase(), cardName: st.cardName || titleCase(result.studentName ?? '') }));
         }
@@ -293,7 +293,7 @@ function ManualPane({ sem, input, setInput }: { sem: SemNo; input: PrevSemInput;
                   Filled {Object.keys(input.imported.filled).length} of {counted.length} papers from your {input.imported.kind === 'photo' ? 'screenshot' : 'PDF'}.
                 </p>
                 <p className="mt-0.5 text-muted">
-                  Highlighted boxes came from the file; check any marked for checking against your sheet.
+                  {input.imported.verifiedSgpa != null ? `These add up to the SGPA printed on your sheet (${input.imported.verifiedSgpa.toFixed(1)}), so they're confirmed. ` : 'Highlighted boxes came from the file; check any marked for checking against your sheet.'}
                   {input.imported.missing.length > 0 && <> Still to type: {input.imported.missing.map((id) => counted.find((c) => c.id === id)?.name ?? id).join(', ')}.</>}
                 </p>
               </Notice>

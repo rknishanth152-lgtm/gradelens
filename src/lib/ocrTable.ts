@@ -23,6 +23,46 @@ export interface OcrEngine {
   page(): Promise<OcrWord[]>;
   /** One strip of the page, restricted to `whitelist` characters, read as a single line. */
   line(rect: Rect, whitelist: string): Promise<string>;
+  /** Optional second, independent reader (e.g. PaddleOCR) for an ensemble. */
+  lineAlt?(rect: Rect, whitelist: string): Promise<string>;
+}
+
+const lastNumber = (t: string) => {
+  const parts = t.replace(/\D+/g, ' ').trim().split(' ').filter(Boolean);
+  return parts.length ? Number(parts[parts.length - 1]) : null;
+};
+
+/** Read one numeric cell with every available engine; returns distinct readings (best engine first). */
+async function readCell(engine: OcrEngine, rect: Rect): Promise<number[]> {
+  const out: number[] = [];
+  if (engine.lineAlt) {
+    const a = lastNumber(await engine.lineAlt(rect, '0123456789'));
+    if (a != null) out.push(a);
+  }
+  const b = lastNumber(await engine.line(rect, '0123456789'));
+  if (b != null && !out.includes(b)) out.push(b);
+  return out;
+}
+
+/**
+ * Pick marks from several readings per cell. Any combination where CIA + ESE = TOTAL wins;
+ * for internal-only papers, the same number read in both cells by every engine counts as agreement.
+ */
+export function decideFromCandidates(ciaC: number[], eseC: number[], totC: number[], def: { ciaMax: number; eseMax: number; totalMax: number }): ImportedMark | null {
+  const opt = (a: number[]) => (a.length ? a : [null]);
+  if (def.eseMax === 0) {
+    const agreed = ciaC.length === 1 && totC.length === 1 && ciaC[0] === totC[0];
+    const d = decideMarks(ciaC[0] ?? null, null, totC[0] ?? ciaC[0] ?? null, def);
+    if (d && agreed && d.total >= def.totalMax * 0.3) return { ...d, confidence: 'high', agreed: true };
+    return d ? { ...d, confidence: 'check' } : null;
+  }
+  let firstCheck: ImportedMark | null = null;
+  for (const c of opt(ciaC)) for (const e of opt(eseC)) for (const t of opt(totC)) {
+    const d = decideMarks(c, e, t, def);
+    if (d?.confidence === 'high') return d;
+    if (d && !firstCheck) firstCheck = d;
+  }
+  return firstCheck;
 }
 
 interface Box {
@@ -70,8 +110,11 @@ export async function readSem3FromGrid(engine: OcrEngine, cols: MarkColumns, gri
     if (y1 <= cols.headerBottom + 2 || y1 - y0 < 8) continue; // header and above
     let codeHit: string | null = null;
     if (codeCol >= 0) {
-      const t = await engine.line(cellRect(codeCol, y0, y1), ALNUM);
-      for (const tok of t.split(/\s+/)) codeHit ??= matchCode(tok, known);
+      for (const reader of [engine.lineAlt?.bind(engine), engine.line.bind(engine)]) {
+        if (!reader || codeHit) continue;
+        const t = await reader(cellRect(codeCol, y0, y1), ALNUM);
+        for (const tok of t.split(/\s+/)) codeHit ??= matchCode(tok, known);
+      }
     }
     let target = codeHit ? targets.find((x) => x.codes.test(codeHit!)) : undefined;
     let nameText = '';
@@ -81,12 +124,8 @@ export async function readSem3FromGrid(engine: OcrEngine, cols: MarkColumns, gri
     }
     if (!target || used.has(target.id)) continue;
     used.add(target.id);
-    const read = async (c: number) => {
-      const t = (await engine.line(cellRect(c, y0, y1), '0123456789')).replace(/\D+/g, ' ').trim();
-      return t ? Number(t.split(' ').pop()) : null;
-    };
-    const [cia, ese, tot] = [await read(idx[0]), await read(idx[1]), await read(idx[2])];
-    const picked = decideMarks(cia, target.def.eseMax > 0 ? ese : null, tot, target.def);
+    const [cia, ese, tot] = [await readCell(engine, cellRect(idx[0], y0, y1)), target.def.eseMax > 0 ? await readCell(engine, cellRect(idx[1], y0, y1)) : [], await readCell(engine, cellRect(idx[2], y0, y1))];
+    const picked = decideFromCandidates(cia, ese, tot, target.def);
     if (picked) result.marks[target.id] = codeHit ? picked : { ...picked, confidence: picked.confidence === 'high' ? 'high' : 'check' };
     if (target.id === 'elective') result.electiveCode = codeHit ?? (/swarm|distributed|intelligence/i.test(nameText) ? ELECTIVE_OPTIONS[1].code : ELECTIVE_OPTIONS[0].code);
     if (target.id === 'mdc') result.mdcCode = codeHit && MDC_OPTIONS.some((o) => o.code === codeHit) ? codeHit : /food|ayurveda|nutrition/i.test(nameText) ? '25MDC27' : codeHit ? '25MDCxx' : '25MDC33';
@@ -229,13 +268,11 @@ export async function readSem3FromImage(engine: OcrEngine, grid: Grid | null = n
     const height = Math.round(span);
 
     // Each marks cell on its own, digits only.
-    const cell: Record<string, number | null> = {};
+    const cell: Record<string, number[]> = {};
     for (const c of cols.cells) {
-      const txt = await engine.line({ left: c.left, top, width: c.width, height }, '0123456789');
-      const n = txt.replace(/\D+/g, ' ').trim().split(' ').map(Number).filter((v) => Number.isFinite(v) && txt.trim() !== '');
-      cell[c.key] = n.length === 1 ? n[0] : n.length > 1 ? n[n.length - 1] : null;
+      cell[c.key] = c.key === 'ese' && target.def.eseMax === 0 ? [] : await readCell(engine, { left: c.left, top, width: c.width, height });
     }
-    let picked: ImportedMark | null = decideMarks(cell.cia, cell.ese, cell.tot, target.def);
+    let picked: ImportedMark | null = decideFromCandidates(cell.cia, cell.ese, cell.tot, target.def);
 
     // Fallback: the whole marks strip in one read (helps when columns are misaligned).
     if (!picked || picked.confidence === 'check') {
@@ -280,7 +317,7 @@ function crossCheck(r: Sem3ImportResult, base: Sem3ImportResult, targets: Target
   const marks = { ...r.marks };
   for (const t of targets) {
     const m = marks[t.id];
-    if (m && m.confidence === 'high' && t.def.eseMax === 0 && base.marks[t.id]?.total !== m.total) marks[t.id] = { ...m, confidence: 'check' };
+    if (m && m.confidence === 'high' && t.def.eseMax === 0 && !m.agreed && base.marks[t.id]?.total !== m.total) marks[t.id] = { ...m, confidence: 'check' };
   }
   return { ...r, marks };
 }

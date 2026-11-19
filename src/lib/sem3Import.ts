@@ -15,6 +15,8 @@ export interface ImportedMark {
   ese: number | null;
   total: number;
   confidence: Confidence;
+  /** Independent readers agreed (used for internal-only papers). */
+  agreed?: boolean;
 }
 
 export interface Sem3ImportResult {
@@ -285,4 +287,15 @@ export function prevTargets(sem: 1 | 2): Target[] {
       const def: Sem3Subject = { id: s.id, code: s.code, name: s.name, short: s.name, ciaMax, eseMax, totalMax: s.totalMax, credits: s.credits, counted: true, inPercentage: false };
       return { id: s.id, def, codes, words };
     });
+}
+
+/** Known codes within `maxD` edits of a token (look-alike characters treated as equal), closest first. */
+export function nearCodes(token: string, known: string[], maxD = 1): string[] {
+  const t = canon(token);
+  if (t.length < 6) return [];
+  return known
+    .map((k) => ({ k, d: editDistance(t, canon(k)) }))
+    .filter((x) => x.d <= maxD)
+    .sort((a, b) => a.d - b.d)
+    .map((x) => x.k);
 }

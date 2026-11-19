@@ -9,6 +9,8 @@ export interface Grid {
   rows: number[];
   /** x of each vertical rule, left to right */
   cols: number[];
+  /** Every horizontal rule across the table, including uneven rows (wrapped names). */
+  allRows: number[];
 }
 
 function darkMask(src: Raster): Uint8Array {
@@ -100,7 +102,8 @@ export function detectGrid(full: Raster): Grid | null {
   const f = full.width > 1300 ? full.width / 1100 : 1;
   const src = f > 1 ? resize(full, Math.round(full.width / f), Math.round(full.height / f)) : full;
   const g = detectGridAt(src);
-  return g && f > 1 ? { rows: g.rows.map((y) => Math.round(y * f)), cols: g.cols.map((x) => Math.round(x * f)) } : g;
+  const up = (a: number[]) => a.map((v) => Math.round(v * f));
+  return g && f > 1 ? { rows: up(g.rows), cols: up(g.cols), allRows: up(g.allRows) } : g;
 }
 
 function detectGridAt(src: Raster): Grid | null {
@@ -109,7 +112,8 @@ function detectGridAt(src: Raster): Grid | null {
   const bridge = Math.max(2, Math.round(w / 400));
   const hCand: number[] = [];
   for (let y = 0; y < h; y++) if (longestRun((x) => dark[y * w + x], w, bridge) >= w * 0.4) hCand.push(y);
-  let rows = tableBody(merge(hCand, Math.max(2, Math.round(h / 600))));
+  const merged = merge(hCand, Math.max(2, Math.round(h / 600)));
+  let rows = tableBody(merged);
   if (rows.length < 4) return null;
   const top = rows[0];
   const bottom = rows[rows.length - 1];
@@ -123,5 +127,6 @@ function detectGridAt(src: Raster): Grid | null {
   const right = cols[cols.length - 1];
   rows = rows.filter((y) => longestRun((x) => dark[y * w + left + x], right - left, bridge * 2) >= (right - left) * 0.5);
   if (rows.length < 4) return null;
-  return { rows, cols };
+  const allRows = merged.filter((y) => longestRun((x) => dark[y * w + left + x], right - left, bridge * 2) >= (right - left) * 0.5);
+  return { rows, cols, allRows };
 }

@@ -34,3 +34,18 @@ Or from the terminal: `npm i -g vercel`, then `vercel --prod` in this folder.
 ## Notes
 
 Sem 3 credits are estimates (19 counted); students can change them under "Change credits". This is an unofficial tool.
+
+## Reading photos and screenshots
+
+Uploads are read on the phone in two passes:
+
+1. **Find the table:** tesseract.js reads the page once to find the rows and the CIA / ESE / TOTAL headers, and a grid detector finds ruled table lines.
+2. **Read every cell:** each marks cell is read by both **PaddleOCR** (PP-OCRv5 English recognizer, ONNX Runtime Web) and **tesseract**. Arithmetic decides: CIA + ESE = TOTAL on result pages. On DigiLocker sheets, External + Internal, grade point and credit points must agree on each total, and the rows must reproduce the printed SGPA.
+
+A value is only shown as sure when those checks pass; everything else is highlighted for the student to check. Run `npx vite-node scripts/eval-samples.ts` to measure accuracy against real marksheets kept in `test-fixtures/private/` (git-ignored).
+
+### Open-source parts
+
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) PP-OCRv5 English recognition model (Apache-2.0), in ORT format from [ppu-paddle-ocr](https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr) (MIT). Served from `public/ocr/`.
+- [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT). WASM served from `public/ort/`.
+- [tesseract.js](https://github.com/naptha/tesseract.js) (Apache-2.0) and [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0).

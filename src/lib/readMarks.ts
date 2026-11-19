@@ -6,7 +6,9 @@
  * The image never leaves the device; the first photo downloads the OCR model (~4 MB) once.
  */
 import { FriendlyParseError, isPdfFile, loadPdfItems, type PositionedText } from './pdfParser';
-import { enhanceCell, OCR_PARAMS, prepareForOcr, type OcrWord, type Raster } from './imagePrep';
+import { cropRaster, enhanceCell, OCR_PARAMS, prepareForOcr, tightRect, type OcrWord, type Raster } from './imagePrep';
+import { PaddleRecognizer } from './paddleRec';
+import { readStatementFromImage } from './statementOcr';
 import { detectGrid } from './grid';
 import { readSem3FromImage, type OcrEngine } from './ocrTable';
 import { importSem3, KNOWN_SEM3_CODES, TARGETS, type Sem3ImportResult, type Target } from './sem3Import';
@@ -16,6 +18,29 @@ export interface ReadProgress {
   stage: ReadStage;
   /** 0–1 */
   progress: number;
+}
+
+let paddlePromise: Promise<PaddleRecognizer | null> | null = null;
+
+/** PaddleOCR recognizer (self-hosted model + ONNX Runtime WASM). Null if it can't load: tesseract alone still works. */
+export function loadPaddle(): Promise<PaddleRecognizer | null> {
+  paddlePromise ??= (async () => {
+    try {
+      const ort = await import('onnxruntime-web/wasm');
+      ort.env.wasm.wasmPaths = `${import.meta.env.BASE_URL}ort/`;
+      ort.env.wasm.numThreads = 1;
+      const base = `${import.meta.env.BASE_URL}ocr/`;
+      const [model, dict] = await Promise.all([
+        fetch(`${base}en_rec.ort`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('model')))),
+        fetch(`${base}en_dict.txt`).then((r) => (r.ok ? r.text() : Promise.reject(new Error('dict')))),
+      ]);
+      return await PaddleRecognizer.create(ort as never, new Uint8Array(model), dict, { executionProviders: ['wasm'] });
+    } catch {
+      paddlePromise = null;
+      return null;
+    }
+  })();
+  return paddlePromise;
 }
 
 export const isImageFile = (file: File) => file.type.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(file.name);
@@ -33,7 +58,8 @@ export async function readMarksTable(
   onProgress: (p: ReadProgress) => void,
   targets: Target[] = TARGETS,
   known: string[] = KNOWN_SEM3_CODES,
-): Promise<{ kind: 'pdf' | 'photo'; result: Sem3ImportResult }> {
+  opts: { statement?: boolean } = {},
+): Promise<{ kind: 'pdf' | 'photo'; result: Sem3ImportResult; printedSgpa?: number | null; verified?: boolean }> {
   onProgress({ stage: 'opening', progress: 0.05 });
   if (isPdfFile(file)) {
     const items = await readPdfItems(file);
@@ -45,6 +71,7 @@ export async function readMarksTable(
   const raster = prepareForOcr(await decodeImage(file));
   const grid = detectGrid(raster);
   onProgress({ stage: 'loading-model', progress: 0.12 });
+  const paddleLoading = loadPaddle();
   const { createWorker } = await import('tesseract.js');
   let phase: 'page' | 'cells' = 'page';
   let cellsRead = 0;
@@ -54,6 +81,7 @@ export async function readMarksTable(
       else if (phase === 'page' && /loading|initializ/i.test(m.status)) onProgress({ stage: 'loading-model', progress: 0.12 + m.progress * 0.18 });
     },
   });
+  const paddle = await paddleLoading;
   const pageCanvas = toCanvas(raster);
   const engine: OcrEngine = {
     async page() {
@@ -71,7 +99,23 @@ export async function readMarksTable(
       return data.text;
     },
   };
+  if (paddle) {
+    engine.lineAlt = async (rect, whitelist) => {
+      if (rect.width < 6 || rect.height < 6) return '';
+      const r = await paddle.recognize(cropRaster(raster, tightRect(raster, rect)), whitelist || undefined);
+      return r.text;
+    };
+  }
   try {
+    // DigiLocker Statement of Grade photo: many columns → cross-checked statement reader.
+    if (opts.statement && grid && grid.cols.length - 1 >= 15) {
+      const words = await engine.page();
+      const st = await readStatementFromImage(engine, grid, targets, known, words);
+      if (st && Object.keys(st.result.marks).length) {
+        onProgress({ stage: 'done', progress: 1 });
+        return { kind: 'photo', result: st.result, printedSgpa: st.printedSgpa, verified: st.verified };
+      }
+    }
     const result = await readSem3FromImage(engine, grid, targets, known);
     onProgress({ stage: 'done', progress: 1 });
     return { kind: 'photo', result };

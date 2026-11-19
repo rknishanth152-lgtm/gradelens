@@ -266,3 +266,52 @@ export function enhanceCell(src: Raster, rect: { left: number; top: number; widt
     }
   return { data: out, width: OW, height: OH };
 }
+
+/** Plain crop (clamped) — for recognizers that prefer raw pixels, like PaddleOCR. */
+export function cropRaster(src: Raster, rect: { left: number; top: number; width: number; height: number }): Raster {
+  const l = Math.max(0, Math.min(src.width - 1, Math.round(rect.left)));
+  const t = Math.max(0, Math.min(src.height - 1, Math.round(rect.top)));
+  const w = Math.max(2, Math.min(src.width - l, Math.round(rect.width)));
+  const h = Math.max(2, Math.min(src.height - t, Math.round(rect.height)));
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) out.set(src.data.subarray(((t + y) * src.width + l) * 4, ((t + y) * src.width + l + w) * 4), y * w * 4);
+  return { data: out, width: w, height: h };
+}
+
+/**
+ * Shrink a cell rectangle to the single line of ink nearest its middle (plus a margin).
+ * Tall cells (wrapped rows) would otherwise shrink the text when a recognizer resizes to a fixed height.
+ */
+export function tightRect(src: Raster, rect: { left: number; top: number; width: number; height: number }) {
+  const c = cropRaster(src, rect);
+  const { width: w, height: h } = c;
+  const gray = new Float32Array(w * h);
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = 0.299 * c.data[j] + 0.587 * c.data[j + 1] + 0.114 * c.data[j + 2];
+  const thr = otsu(gray);
+  let dark = 0;
+  for (const g of gray) if (g < thr) dark++;
+  const invert = dark > gray.length * 0.6;
+  const ink = new Array(h).fill(0);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (invert ? gray[y * w + x] > thr : gray[y * w + x] < thr) ink[y]++;
+  // Ignore rule-line rows (nearly full width).
+  for (let y = 0; y < h; y++) if (ink[y] > w * 0.85) ink[y] = 0;
+  const bands: Array<[number, number]> = [];
+  let start = -1;
+  for (let y = 0; y <= h; y++) {
+    const on = y < h && ink[y] > Math.max(1, w * 0.01);
+    if (on && start < 0) start = y;
+    if (!on && start >= 0) {
+      bands.push([start, y - 1]);
+      start = -1;
+    }
+  }
+  const real = bands.filter(([a, b]) => b - a >= 3);
+  if (!real.length) return rect;
+  const mid = h / 2;
+  const [a, b] = real.reduce((best, x) => (Math.abs((x[0] + x[1]) / 2 - mid) < Math.abs((best[0] + best[1]) / 2 - mid) ? x : best));
+  const th = b - a + 1;
+  const pad = Math.round(th * 0.35);
+  const top = Math.max(0, a - pad);
+  const bottom = Math.min(h, b + 1 + pad);
+  return { left: rect.left, top: rect.top + top, width: rect.width, height: bottom - top };
+}
