@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>GradeLens: SGPA & CGPA for SKASC B.Sc CT</title>
+    <meta name="description" content="Work out your Semester 3 SGPA, CGPA and percentage from your marks, a photo of the result page, or your DigiLocker PDF. Runs on your phone; nothing is uploaded." />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f4f6fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1424" media="(prefers-color-scheme: dark)" />
+    <meta property="og:title" content="GradeLens: read your marks the way the exam cell does" />
+    <meta property="og:description" content="SGPA, CGPA and percentage for SKASC B.Sc Computer Technology, 2025–28. Your marks never leave your phone." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      crossorigin="anonymous"
+      media="print"
+      onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Kalam:wght@400;700&family=Work+Sans:wght@400;500;600;700&display=swap"
+    />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('gradelens:theme');
+          var dark = t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
